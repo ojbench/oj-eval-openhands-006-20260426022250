@@ -313,7 +313,12 @@ void Decide() {
       if (p >= 0.0 && p < bestP) { bestP = p; bestVar = vid; }
       if (bestP <= 1e-12) break;
     }
-    if (bestVar != -1) { auto p = vars[bestVar]; if (bestP <= 1e-12) { Execute(p.first, p.second, 0); return; } Execute(p.first, p.second, 0); return; }
+    if (bestVar != -1) {
+      auto p = vars[bestVar];
+      if (bestP <= 1e-12) { Execute(p.first, p.second, 0); return; }
+      if (bestP >= 1.0 - 1e-12) { Execute(p.first, p.second, 1); return; }
+      Execute(p.first, p.second, 0); return;
+    }
   }
   // 5) Visit unknown neighboring a zero if possible
   for (int r = 0; r < rows; ++r) {
