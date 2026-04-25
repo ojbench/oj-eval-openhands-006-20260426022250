@@ -90,7 +90,7 @@ static bool solve_local(const std::vector<std::pair<int,int>>& vars,
                         const std::vector<int>& cons_need,
                         std::vector<double>& prob) {
   int n = (int)vars.size();
-  const int NMAX = 16; // limit enumeration size
+  const int NMAX = 28; // limit enumeration size (balanced for TL)
   if (n == 0) return false;
   if (n > NMAX) return false;
   int m = (int)cons_vars.size();
@@ -100,11 +100,13 @@ static bool solve_local(const std::vector<std::pair<int,int>>& vars,
   long long total = 0;
   std::vector<long long> one(n, 0);
 
+  // build adjacency: var -> constraints it appears in
+  std::vector<std::vector<int>> varAdj(n);
+  for (int ci = 0; ci < m; ++ci) for (int id : cons_vars[ci]) varAdj[id].push_back(ci);
+
   // variable ordering: by appearance count (most constrained first)
   std::vector<int> order(n); for (int i=0;i<n;++i) order[i]=i;
-  std::vector<int> count(n,0);
-  for (int i=0;i<m;++i) for (int id: cons_vars[i]) ++count[id];
-  std::stable_sort(order.begin(), order.end(), [&](int a,int b){ return count[a]>count[b]; });
+  std::stable_sort(order.begin(), order.end(), [&](int a,int b){ return varAdj[a].size()>varAdj[b].size(); });
 
   std::function<void(int)> dfs = [&](int idx){
     if (idx == n) {
@@ -114,20 +116,14 @@ static bool solve_local(const std::vector<std::pair<int,int>>& vars,
       return;
     }
     int var = order[idx];
-    // try 0/1
     for (int val = 0; val <= 1; ++val) {
       bool ok = true;
-      // apply
-      for (int ci = 0; ci < m; ++ci) {
-        // if var in constraint ci
-        // linear scan acceptable as sizes small
-        bool involved = false;
-        for (int id : cons_vars[ci]) if (id == var) { involved = true; break; }
-        if (!involved) continue;
+      // apply only to affected constraints
+      for (int ci : varAdj[var]) {
         if (val == 1) ++sum[ci];
         --left[ci];
-        if (sum[ci] > need[ci]) ok = false;
-        if (sum[ci] + left[ci] < need[ci]) ok = false;
+        if (sum[ci] > need[ci]) { ok = false; }
+        if (sum[ci] + left[ci] < need[ci]) { ok = false; }
       }
       if (ok) {
         assign[var] = val;
@@ -135,10 +131,7 @@ static bool solve_local(const std::vector<std::pair<int,int>>& vars,
         assign[var] = -1;
       }
       // rollback
-      for (int ci = 0; ci < m; ++ci) {
-        bool involved = false;
-        for (int id : cons_vars[ci]) if (id == var) { involved = true; break; }
-        if (!involved) continue;
+      for (int ci : varAdj[var]) {
         if (val == 1) --sum[ci];
         ++left[ci];
       }
