@@ -229,21 +229,61 @@ void Decide() {
       }
     }
   }
-  // 4) Local CSP on frontier
+  // 4) Local CSP on frontier with component decomposition
   std::vector<std::pair<int,int>> vars; std::vector<std::vector<int>> cons_vars; std::vector<int> cons_need, var_of_pos;
   build_constraints(vars, cons_vars, cons_need, var_of_pos);
-  std::vector<double> prob;
-  if (solve_local(vars, cons_vars, cons_need, prob)) {
-    int n = (int)vars.size();
-    // if any prob is 0 or 1, act surely
-    for (int i = 0; i < n; ++i) {
-      if (prob[i] <= 1e-12) { Execute(vars[i].first, vars[i].second, 0); return; }
-      if (prob[i] >= 1.0 - 1e-12) { Execute(vars[i].first, vars[i].second, 1); return; }
+  // Build var->constraints mapping
+  int V = (int)vars.size(); int C = (int)cons_vars.size();
+  std::vector<std::vector<int>> var_to_cons(V);
+  for (int ci = 0; ci < C; ++ci) for (int id : cons_vars[ci]) var_to_cons[id].push_back(ci);
+  // Component decomposition over variable nodes
+  std::vector<int> comp(V, -1); int comp_cnt = 0;
+  std::vector<int> comp_best_var; std::vector<double> comp_best_prob;
+  double global_best_prob = 1e9; int global_best_var = -1;
+  for (int s = 0; s < V; ++s) if (comp[s] == -1) {
+    // BFS over var-cons-var
+    std::vector<int> comp_vars_ids; comp_vars_ids.reserve(32);
+    std::vector<int> comp_cons_ids; comp_cons_ids.reserve(32);
+    std::vector<char> seen_cons(C, 0);
+    std::vector<int> q; q.push_back(s); comp[s] = comp_cnt;
+    for (size_t qi = 0; qi < q.size(); ++qi) {
+      int v = q[qi]; comp_vars_ids.push_back(v);
+      for (int ci : var_to_cons[v]) if (!seen_cons[ci]) {
+        seen_cons[ci] = 1; comp_cons_ids.push_back(ci);
+        for (int nv : cons_vars[ci]) if (comp[nv] == -1) { comp[nv] = comp_cnt; q.push_back(nv); }
+      }
     }
-    // otherwise pick minimal probability to visit
-    int best = 0; for (int i = 1; i < n; ++i) if (prob[i] < prob[best]) best = i;
-    Execute(vars[best].first, vars[best].second, 0); return;
+    // Build subproblem
+    int n = (int)comp_vars_ids.size();
+    if (n == 0) { ++comp_cnt; continue; }
+    const int NMAX = 24;
+    if (n <= NMAX) {
+      std::vector<int> map_old_to_new(V, -1);
+      std::vector<std::pair<int,int>> sub_vars(n);
+      for (int i = 0; i < n; ++i) { int old = comp_vars_ids[i]; map_old_to_new[old] = i; sub_vars[i] = vars[old]; }
+      std::vector<std::vector<int>> sub_cons_vars;
+      std::vector<int> sub_need;
+      for (int ci : comp_cons_ids) {
+        std::vector<int> tmp;
+        for (int id : cons_vars[ci]) tmp.push_back(map_old_to_new[id]);
+        sub_cons_vars.push_back(std::move(tmp));
+        sub_need.push_back(cons_need[ci]);
+      }
+      std::vector<double> prob;
+      if (solve_local(sub_vars, sub_cons_vars, sub_need, prob)) {
+        // act on forced moves if any
+        for (int i = 0; i < n; ++i) {
+          if (prob[i] <= 1e-12) { auto p = sub_vars[i]; Execute(p.first, p.second, 0); return; }
+          if (prob[i] >= 1.0 - 1e-12) { auto p = sub_vars[i]; Execute(p.first, p.second, 1); return; }
+        }
+        // remember best in this component
+        int best = 0; for (int i = 1; i < n; ++i) if (prob[i] < prob[best]) best = i;
+        if (prob[best] < global_best_prob) { global_best_prob = prob[best]; global_best_var = comp_vars_ids[best]; }
+      }
+    }
+    ++comp_cnt;
   }
+  if (global_best_var != -1) { auto p = vars[global_best_var]; Execute(p.first, p.second, 0); return; }
   // 5) Visit unknown neighboring a zero if possible
   for (int r = 0; r < rows; ++r) {
     for (int c = 0; c < columns; ++c) {
