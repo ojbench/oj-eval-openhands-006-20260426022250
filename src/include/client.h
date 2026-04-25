@@ -249,7 +249,7 @@ void Decide() {
     // Build subproblem
     int n = (int)comp_vars_ids.size();
     if (n == 0) { ++comp_cnt; continue; }
-    const int NMAX = 24;
+    const int NMAX = 28;
     if (n <= NMAX) {
       std::vector<int> map_old_to_new(V, -1);
       std::vector<std::pair<int,int>> sub_vars(n);
@@ -277,6 +277,44 @@ void Decide() {
     ++comp_cnt;
   }
   if (global_best_var != -1) { auto p = vars[global_best_var]; Execute(p.first, p.second, 0); return; }
+  // 4b) Variable-centric local CSP if components too large
+  if (!vars.empty()) {
+    int Vn = (int)vars.size(); int Cn = (int)cons_vars.size();
+    std::vector<std::vector<int>> var_to_cons2(Vn);
+    for (int ci = 0; ci < Cn; ++ci) for (int id : cons_vars[ci]) var_to_cons2[id].push_back(ci);
+    auto local_prob = [&](int center_id)->double{
+      const int LIMIT = 20;
+      std::vector<int> var_seen(Vn, 0), cons_seen(Cn, 0);
+      std::vector<int> q; q.push_back(center_id); var_seen[center_id] = 1;
+      for (size_t qi = 0; qi < q.size() && (int)q.size() < LIMIT; ++qi) {
+        int v = q[qi];
+        for (int ci : var_to_cons2[v]) if (!cons_seen[ci]) {
+          cons_seen[ci] = 1;
+          for (int nv : cons_vars[ci]) if (!var_seen[nv] && (int)q.size() < LIMIT) { var_seen[nv] = 1; q.push_back(nv); }
+        }
+      }
+      int n = (int)q.size();
+      std::vector<int> map_old_to_new(Vn, -1);
+      std::vector<std::pair<int,int>> sub_vars(n);
+      for (int i = 0; i < n; ++i) { int old = q[i]; map_old_to_new[old] = i; sub_vars[i] = vars[old]; }
+      std::vector<std::vector<int>> sub_cons_vars; std::vector<int> sub_need;
+      for (int ci = 0; ci < Cn; ++ci) if (cons_seen[ci]) {
+        std::vector<int> tmp;
+        for (int id : cons_vars[ci]) { int nid = map_old_to_new[id]; if (nid != -1) tmp.push_back(nid); }
+        if (!tmp.empty()) { sub_cons_vars.push_back(std::move(tmp)); sub_need.push_back(cons_need[ci]); }
+      }
+      std::vector<double> prob; if (!solve_local(sub_vars, sub_cons_vars, sub_need, prob)) return -1.0;
+      int idx = map_old_to_new[center_id]; if (idx < 0) return -1.0;
+      return prob[idx];
+    };
+    double bestP = 2.0; int bestVar = -1;
+    for (int vid = 0; vid < Vn; ++vid) {
+      double p = local_prob(vid);
+      if (p >= 0.0 && p < bestP) { bestP = p; bestVar = vid; }
+      if (bestP <= 1e-12) break;
+    }
+    if (bestVar != -1) { auto p = vars[bestVar]; if (bestP <= 1e-12) { Execute(p.first, p.second, 0); return; } Execute(p.first, p.second, 0); return; }
+  }
   // 5) Visit unknown neighboring a zero if possible
   for (int r = 0; r < rows; ++r) {
     for (int c = 0; c < columns; ++c) {
